@@ -13,7 +13,7 @@ import { pollThreads as pollGithubThreads } from '../src/sources/github.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
 import { Store } from '../src/app/store.ts'
-import { Commands, commandError } from '../src/infra/commands.ts'
+import { CliError, Commands, commandError } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
@@ -1181,6 +1181,48 @@ describe('feishu event consumer', () => {
     // The first restart waits a second.
     await vi.waitFor(() => expect(runs()).toBe(2), until)
     await vi.waitFor(() => expect(health.feishu).toMatchObject({ state: 'ready' }), until)
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('starts reading history once the bot resolves, rather than having ended the loop while setup still waited for it', async () => {
+    // Setup resolves the bot asynchronously, so a loop that returns while it waits never runs again: the messages it should
+    // have read stay unread until the process restarts. Waiting instead lets it pick the work up as soon as the bot answers.
+    const hour = new Date(Date.now() - 3_600_000).toISOString()
+    const { ctx, health, store } = consumerSource(cli('ready'), { chats: [{ chatId: 'oc_group', listen: 'mentions' }] })
+    store.set(KV.feishu.history('oc_group'), hour)
+    const reads: string[] = []
+    vi.spyOn(Commands.prototype, 'lark').mockImplementation(async args => {
+      if (args[2] === '/open-apis/im/v1/messages') reads.push((JSON.parse(args.at(-1)!) as { container_id: string }).container_id)
+      return { has_more: false, items: [] }
+    })
+    // Setup has not resolved the bot yet; it does shortly after the loops start, as an asynchronous setup would.
+    let resolved = false
+    setTimeout(() => { resolved = true }, 200)
+    running = runFeishu({ ...ctx, configured: () => resolved } as typeof ctx, controller.signal)
+    await vi.waitFor(() => expect(health.history).toMatchObject({ state: 'paused', code: 'feishuBotMissing' }), until)
+    // The loop is still alive, so it reads the chat once the bot appears instead of having ended at the first wait.
+    await vi.waitFor(() => expect(reads).toContain('oc_group'), until)
+    expect(health.history).toMatchObject({ state: 'ready' })
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('skips a chat the bot can no longer read instead of spending every round on it, and keeps the other chats moving', async () => {
+    const hour = new Date(Date.now() - 3_600_000).toISOString()
+    const { ctx, health, store } = consumerSource(cli('ready'), { chats: [{ chatId: 'oc_gone', listen: 'mentions' }, { chatId: 'oc_ok', listen: 'mentions' }] })
+    for (const chat of ['oc_gone', 'oc_ok']) store.set(KV.feishu.history(chat), hour)
+    const chats: string[] = []
+    vi.spyOn(Commands.prototype, 'lark').mockImplementation(async args => {
+      const params = args[2] === '/open-apis/im/v1/messages' ? JSON.parse(args.at(-1)!) as { container_id: string } : undefined
+      if (params) chats.push(params.container_id)
+      // 230002: the bot is no longer in the chat. Retrying cannot fix it, and treating it as a transient error would
+      // hold back every later chat's messages on every round.
+      if (params?.container_id === 'oc_gone') throw new CliError('The bot is not in the chat (230002)', 230002)
+      return { has_more: false, items: [] }
+    })
+    running = runFeishu(ctx, controller.signal)
+    await vi.waitFor(() => expect(health.history).toMatchObject({ state: 'paused', detail: expect.stringContaining('oc_gone') }), until)
+    // The unreadable chat advanced its cursor, so it is not retried; the readable one did too, on its own success.
+    expect(store.get(KV.feishu.history('oc_gone'))).not.toBe(hour)
+    expect(Date.parse(store.get(KV.feishu.history('oc_ok'))!)).toBeGreaterThan(Date.parse(hour))
+    expect(chats).toEqual(expect.arrayContaining(['oc_gone', 'oc_ok']))
     controller.abort(); await running; store.close()
   }, 20_000)
 })
