@@ -97,9 +97,14 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
  * The directory a ticket works in. A ticket that names a project keeps its directory in a `.superagent` folder beside that
  * project, so one project's tickets stay together wherever the configured root is and the project's own tree stays clean.
  * Without a project, the ticket goes under the configured root.
+ * A project path that is not absolute is refused here rather than resolved, since `dirname`/`basename` would place the ticket
+ * beside the host's own working directory instead of the project the person meant.
  */
 export function ticketDirectory(project: string | undefined, name: string, settings: Settings, stateDir: string): string {
-  return project ? join(dirname(project), '.superagent', basename(project), name) : join(executionRoot(settings, stateDir), name)
+  if (!project) return join(executionRoot(settings, stateDir), name)
+  const path = project.trim()
+  if (!path.startsWith('/')) throw new Error(`A ticket's project must be an absolute path, not ${JSON.stringify(project)}`)
+  return join(dirname(path), '.superagent', basename(path), name)
 }
 /** Builds a newly accepted ticket's Execution metadata: its worktree name, workspace directory, and assignment text. */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,

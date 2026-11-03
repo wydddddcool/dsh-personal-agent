@@ -72,7 +72,10 @@ const FIELDS: Record<Field, { check: z.ZodType; reads: readonly Kind[]; needs: r
   note: { check: RoutingNoteSchema, reads: ['accept', 'attach'], needs: [] },
   reason: { check: z.string().max(500), reads: ['ignore', 'stop'], needs: ['ignore'] },
 }
-/** Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. */
+/**
+ * Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. A value that passes its check
+ * is written back normalized, so what the item's kind forwards is exactly what the check accepted, such as a trimmed path.
+ */
 function invalid(item: RouteItem): string | undefined {
   for (const [field, { check, reads, needs }] of Object.entries(FIELDS) as [Field, typeof FIELDS[Field]][]) {
     const value = item[field]
@@ -83,6 +86,7 @@ function invalid(item: RouteItem): string | undefined {
     }
     const checked = check.safeParse(value)
     if (!checked.success) return `${field}: ${checked.error.issues[0]?.message ?? 'invalid'}`
+    if (typeof checked.data === 'string') (item as unknown as Record<string, unknown>)[field] = checked.data
   }
   return undefined
 }
@@ -173,7 +177,7 @@ function requestTool(host: MainToolsHost): Tool {
       scope: z.string().trim().min(1).max(1500),
       request: z.string().trim().min(1),
       worktree_name: WorktreeNameSchema.describe(`Short English name for the ticket's working directory. ${WorktreeNameSchema.description ?? ''}`),
-      project: z.string().trim().min(1).optional().describe('Absolute path of the project this work is for.'),
+      project: z.string().trim().min(1).refine(path => path.startsWith('/'), 'An absolute path').optional().describe('Absolute path of the project this work is for; the ticket directory goes beside it.'),
     }).strict(),
     execute: async args => {
       const at = new Date().toISOString()

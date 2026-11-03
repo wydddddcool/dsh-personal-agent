@@ -517,6 +517,29 @@ it('routes a ticket into the project its accept names, and into the configured r
   expect(unnamedTicket.execution!.directory).toBe(join(executorRoot(), 'fix-regression-' + unnamedTicket.id.slice(0, 12)))
 })
 
+it('forwards the project path its check accepted, trimmed, and refuses one that is not absolute', async () => {
+  const padded = feishu('1', '@bot 修一下回归'), relative = feishu('2', '@bot 再修一个')
+  h.runtime.receive(padded); h.runtime.receive(relative)
+  await h.runtime.idle()
+  const accept = { kind: 'accept', worktree_name: 'fix-regression', acknowledgement: '收到。', title: 'Fix' }
+  const { results } = await h.runTool(h.runtime.masterId, 'orchestrator_route', { decisions: [
+    // A whitespace-padded absolute path is accepted, and must reach the Engine trimmed, or it would read as relative.
+    { ...accept, trigger_id: padded.id, project: '  /work/billing  ' },
+    { ...accept, trigger_id: relative.id, project: 'work/billing' },
+  ] }) as { results: Record<string, unknown>[] }
+  expect(results[0]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[1]).toEqual({ trigger_id: relative.id, kind: 'accept', refused: 'project: An absolute path' })
+  const ticket = h.runtime.store.tickets.list().find(item => item.origin.triggerId === padded.id)!
+  expect(ticket.execution!.directory).toBe('/work/.superagent/billing/fix-regression-' + ticket.id.slice(0, 12))
+})
+
+it('refuses a relative project path on the request tool, so the ticket is never prepared in the host\'s directory', async () => {
+  const request = { title: 'Fix', scope: 'Fix', request: '修一下', worktree_name: 'fix-regression' }
+  // The check runs as the tool parses its arguments, before any ticket exists.
+  await expect(h.runTool(h.runtime.masterId, 'orchestrator_request', { ...request, project: 'billing' })).rejects.toThrow(/absolute path/i)
+  expect(h.runtime.store.tickets.list()).toEqual([])
+})
+
 it('retires an ended ticket: its Executor Session archived, its workspace released, its directory left alone', async () => {
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   const directory = ticket.execution!.directory
