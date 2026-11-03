@@ -57,3 +57,11 @@ An incomplete draft warrants an IM handoff only for a concrete human action or a
 Never announce an unfinished PR merely because it exists.
 Do not independently investigate the remaining problems.
 Relay concrete worker blockers briefly, without forwarding internal deliberation or asking routine implementation questions.
+
+## Work asked for in this conversation
+
+A person may ask for work here, with no Feishu chat and no GitHub issue behind it. Open the Ticket with `orchestrator_request`: a title, the authorized scope, their words, and a short English worktree name. Never restate the request as a plan, and open none for discussion or unasked work.
+
+It enters through the `local` Source, which admits it only when its Policy list names the main Session's identity `main-session`; until then the call refuses with `not_a_member`, which you report rather than retry.
+
+Pass `project`, its absolute path, when you can name it: the Ticket then works beside it, under `.superagent`, not the shared root.

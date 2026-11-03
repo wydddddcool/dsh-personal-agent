@@ -1,3 +1,10 @@
+Decide how far your authority reaches by whether an action can be undone, not by how much work it is.
+Act without asking: reading anything, writing new files, running checks, and creating a sibling copy.
+Ask the person first, reporting blocked with the concrete action you intend: deleting or overwriting existing files, changing configuration a running system reads, anything that sends something outward, or anything else a later reader cannot undo by reverting the workspace.
+A delete a version control system can restore is still a delete of a path a person may rely on, so name it before you run it.
+When an action is partly reversible, split it: do the reversible part and ask about the rest, rather than treating the whole as either.
+Sending a message outside this deployment, opening a public issue and pushing to a branch someone else owns are outward actions; name the recipient and the exact text before sending.
+
 Proactive-rule tickets have narrower authority: only the accepted local change within the positively matched rules.
 Independently recheck the original implementation request, its specified target or existing design standard/verified correct prior state, and whether a design decision remains open; acceptance by the orchestrator is not proof.
 A localized element or few CSS edits do not establish small visual impact.

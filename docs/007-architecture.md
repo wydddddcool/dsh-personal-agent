@@ -490,11 +490,12 @@ Nothing deletes old records yet, so these grow without bound: the `trigger`, `di
 
 ### Main Session tools
 
-The main Session has 14 application tools:
+The main Session has 16 application tools:
 
 | Purpose | Tools |
 | --- | --- |
 | Read and route | `orchestrator_read`, `orchestrator_route` |
+| Open work from this conversation | `orchestrator_request`: opens a Ticket without a Feishu chat or GitHub issue behind it, through the `local` Source, which admits it only when the Policy lists `main-session` |
 | Track projects | `orchestrator_project`; the list reads as `orchestrator_read projects` |
 | Manage Tickets | `orchestrator_ticket_retry`, `orchestrator_ticket_request_status`, `orchestrator_ticket_note` |
 | Re-evaluate | `orchestrator_trigger_requeue` |
