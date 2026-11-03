@@ -383,9 +383,15 @@ export class DshExecutor implements Executor {
   retire(ticket: Ticket): void {
     const sessionId = workerSessionId(ticket.id)
     const directory = ticket.execution?.directory ?? ''
+    // Read afresh at each look, so a resume that lands while the retire runs is seen rather than overwritten.
+    const resumed = () => { const stored = this.host.store.tickets.get(ticket.id); return !!stored && liveTicket(stored) }
     this.host.store.afterCommit(() => {
-      void this.background(this.stopped(ticket.id).then(() => this.host.sessions.retire(sessionId, directory))
-        .catch(() => { /* The conversation lists keep the Session; the ticket is over either way. */ }))
+      void this.background(this.stopped(ticket.id).then(() => {
+        // A person's message may have resumed the ticket while that stop ran: its Session is working again, and archiving it
+        // now would reject its next step. The end that resumed it retires the Session when it ends in turn.
+        if (resumed()) return
+        return this.host.sessions.retire(sessionId, directory, resumed)
+      }).catch(() => { /* The conversation lists keep the Session; the ticket is over either way. */ }))
     })
   }
   /** Stop what a ticket's worker runs in the background (see `stopBackground`). */

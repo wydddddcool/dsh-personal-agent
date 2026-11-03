@@ -166,8 +166,9 @@ export class Sessions {
    * its directory once no session of that workspace remains. The session's log and the directory's contents are untouched, so
    * a person's message on one of the ticket's threads still resolves it and unarchiving restores it in place.
    * Absent services, or a failure of either step, leave the Session and the workspace as they were.
+   * @param resumed - Whether the ticket came back to life, read again after the archive landed so a resume that raced it wins.
    */
-  async retire(sessionId: string, directory: string): Promise<void> {
+  async retire(sessionId: string, directory: string, resumed: () => boolean): Promise<void> {
     const ctx = this.ctx
     const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
     if (!registry) return
@@ -176,6 +177,13 @@ export class Sessions {
     await registry.archiveSession(sessionId as SessionId, { stopActivity: true }).catch((error: unknown) => {
       if (!(error instanceof WorkspaceUnknownSessionError)) ctx.logger.warn('dsh-superagent could not archive %s: %s', sessionId, String(error))
     })
+    // The ticket may have resumed while the archive was being written, in which case its Session has to accept steps again.
+    if (resumed()) {
+      await registry.unarchiveSession(sessionId as SessionId).catch((error: unknown) => {
+        ctx.logger.warn('dsh-superagent could not restore the resumed %s: %s', sessionId, String(error))
+      })
+      return
+    }
     if (!directory) return
     const workspace = await registry.resolveByPath(directory).catch(() => undefined)
     if (!workspace) return

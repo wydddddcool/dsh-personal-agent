@@ -544,6 +544,31 @@ it('restores an archived ticket Session before a person\'s message resumes it', 
   await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(false))
 })
 
+it('keeps a resumed ticket\'s Session out of the archive when the resume lands while its end is being retired', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  // Hold the retire of the end at the point a person's message would land, then let it go after the ticket resumed.
+  const archive = h.workspace.archiveSession.bind(h.workspace)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let reached!: () => void
+  const waiting = new Promise<void>(resolve => { reached = resolve })
+  vi.spyOn(h.workspace, 'archiveSession').mockImplementation(async id => {
+    reached()
+    await held
+    await archive(id)
+  })
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await waiting
+  // The ticket resumes while the ended one is still being retired.
+  h.runtime.receive(feishu('2', '@bot 其实这个还是要修的', { root_id: 'om_1' }))
+  await h.runtime.idle()
+  expect(h.runtime.store.tickets.get(ticket.id)!.ended).toBeUndefined()
+  release()
+  await h.runtime.idle()
+  // A Session that resumed is working again, so archiving it would reject its next step.
+  expect(h.workspace.archived.has(sessionId)).toBe(false)
+})
+
 it('records projects and reads them back newest change first through the projects resource, upserting by path', async () => {
   const write = (overrides: Record<string, unknown>) => h.runTool(h.runtime.masterId, 'orchestrator_project', {
     path: '/work/billing', name: 'billing', summary: 'Invoicing service.', step: 'Wiring the retry path.', status: 'active', ...overrides })
