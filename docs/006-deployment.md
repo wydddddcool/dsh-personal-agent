@@ -230,6 +230,14 @@ A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write s
 
 From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
 
+## Local data on a Mac
+
+An Executor reaches macOS Calendar and Reminders with `osascript`, which its shell tool already runs, so an application such as a personal assistant needs no extra plugin, skill or configuration. The calls run as the operator's own user.
+
+A closed application answers with error `-600`, so a script that reads Calendar fails until Calendar runs. Opening it first is enough: with the application up, reading works with no further setup. Reminders answers whether or not its window is open.
+
+That is a property of the operator's machine rather than of this bundle, and macOS may apply its own privacy controls to the calling process; the operator's first call from a Session they are watching is the cheapest way to find out on a new machine.
+
 ## Upgrade
 
 1. Wait until no Executor is in the middle of a turn.
