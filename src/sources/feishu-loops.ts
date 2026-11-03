@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
-import { validItems, type Tally } from '../infra/commands.ts'
+import { CliError, validItems, type Tally } from '../infra/commands.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
   from './feishu-trigger.ts'
@@ -39,13 +39,21 @@ function available(ctx: SourceContext): boolean {
   return false
 }
 
+/**
+ * Feishu error codes that retrying cannot fix: the bot left the chat (230002), the bot is not a member (232011), and the
+ * app lacks the scope the call needs (99991672). A chat that answers with one of these is skipped for the round instead of
+ * being retried every minute, which would hold back every other chat's messages.
+ */
+const PERMANENT_CHAT_CODES = new Set([230002, 232011, 99991672])
+const permanentChatError = (error: unknown): boolean => error instanceof CliError && error.code !== undefined && PERMANENT_CHAT_CODES.has(error.code)
+
 /** Runs the live event consumer only while the Source is enabled; disabling it stops the consumer within five seconds. */
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
-  // Setup restarts dsh-superagent once it resolves the bot; until then nothing runs.
-  if (!available(ctx)) return
   let retry: number | undefined
   while (!signal.aborted) {
+    // Setup resolves the bot asynchronously, so an unavailable Source is a state to wait out, not a reason to stop.
+    if (!available(ctx)) { await delay(5000, undefined, { signal }).catch(() => {}); continue }
     if (!enabled(ctx)) {
       ctx.report('feishu', health('paused', 'sourceOff'))
       await delay(5000, undefined, { signal }).catch(() => {})
@@ -116,8 +124,8 @@ export async function refreshChatNames(ctx: SourceContext, signal?: AbortSignal)
 /** Rereads the chat list every minute independently of history backfill (whose rounds can take much longer), so newly joined chats appear within a minute. */
 async function chatNamesLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
-  if (!available(ctx)) return
   while (!signal.aborted) {
+    if (!available(ctx)) { await delay(5000, undefined, { signal }).catch(() => {}); continue }
     if (enabled(ctx)) {
       try { await refreshChatNames(ctx, signal) }
       catch { /* Names are a display aid; the stored list stays until a later read succeeds. */ }
@@ -127,8 +135,13 @@ async function chatNamesLoop(ctx: SourceContext, signal: AbortSignal): Promise<v
 }
 async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
-  if (!available(ctx)) { ctx.report('history', health('paused', 'feishuBotMissing')); return }
   while (!signal.aborted) {
+    // Waiting beats returning: setup may not have resolved the bot yet, and a return here ends history backfill for good.
+    if (!available(ctx)) {
+      ctx.report('history', health('paused', 'feishuBotMissing'))
+      await delay(5000, undefined, { signal }).catch(() => {})
+      continue
+    }
     const config = enabled(ctx)
     if (!config) {
       ctx.report('history', health('paused', 'sourceOff'))
@@ -139,6 +152,7 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
     const known = Object.entries(seen).filter(([, direct]) => direct && config.directMessages)
     const chats = { ...Object.fromEntries(config.chats.map(chat => [chat.chatId, false])), ...Object.fromEntries(known) }
     const errors: string[] = []
+    const paused = new Map<string, string>()
     const tally = { skipped: 0 }
     for (const [chatId, direct] of Object.entries(chats)) {
       if (signal.aborted) break
@@ -149,13 +163,24 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
       try {
         await backfillChat(ctx, chatId, direct, since, started, signal, tally)
         if (!signal.aborted) ctx.state.set(cursorKey, cursorAt(started))
-      } catch (error) { if (!signal.aborted) errors.push(`${chatId}: ${String(error)}`) }
+      } catch (error) {
+        if (signal.aborted) break
+        // A permanent error means this chat can never be read again until someone acts: advance its cursor so the next round
+        // skips it instead of spending every round on the same failure.
+        if (permanentChatError(error)) {
+          ctx.state.set(cursorKey, cursorAt(started))
+          paused.set(chatId, String(error))
+          continue
+        }
+        errors.push(`${chatId}: ${String(error)}`)
+      }
     }
     await pollThreads(ctx, signal, tally)
     const skipped = tally.skipped ? `; ${tally.skipped} unreadable messages skipped` : ''
+    const pausedNote = paused.size ? `; ${paused.size} chat(s) skipped until the bot is added back: ${[...paused.keys()].join(', ')}` : ''
     if (!signal.aborted) ctx.report('history', errors.length
-      ? { state: 'error', detail: errors.join('\n') }
-      : { state: 'ready', detail: `Configured groups and known direct chats recovered${skipped}`, at: new Date().toISOString() })
+      ? { state: 'error', detail: `${errors.join('\n')}${pausedNote}` }
+      : { state: paused.size ? 'paused' : 'ready', detail: `Configured groups and known direct chats recovered${skipped}${pausedNote}`, at: new Date().toISOString() })
     await delay(60_000, undefined, { signal }).catch(() => {})
   }
 }

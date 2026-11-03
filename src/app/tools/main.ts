@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
-import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
+import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople, type Trigger }
   from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
@@ -12,6 +12,7 @@ import { readResource, type MainResourceHost, type ResourceHost } from '../resou
 import type { Sessions } from '../sessions.ts'
 import type { Settings } from '../settings.ts'
 import type { Store } from '../store.ts'
+import { LOCAL_ACTOR, LOCAL_SOURCE } from '../../sources/local.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
 const RoutingNoteSchema = z.string().trim()
@@ -20,6 +21,8 @@ const RoutingNoteSchema = z.string().trim()
 export interface MainToolsHost {
   readonly context: Context
   readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
+  /** Admits a Trigger the main Session composed itself, so a request made here does not need an external Source. */
+  receive(trigger: Trigger): 'stored' | 'duplicate' | 'filtered'
   readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings'>
   readonly prompts: Pick<Prompts, 'preview' | 'save'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
@@ -152,12 +155,43 @@ function routeTool(host: MainToolsHost): Tool {
   })
 }
 /** Builds the main Session's tools; `agent` scopes prompt preview resources to that Session. */
+/**
+ * `orchestrator_request`: opens a ticket from the deployment's own conversation. It composes the Trigger an external Source
+ * would have produced, at the moment the request is made, so a person talking to the main Session does not have to move to
+ * a Feishu chat or open a GitHub issue first. The work still runs as an ordinary ticket, in its own directory and its own
+ * Executor Session, and its report comes back like any other.
+ */
+function requestTool(host: MainToolsHost): Tool {
+  return tool({
+    name: 'orchestrator_request',
+    description: 'Open a ticket for work a person asked for in this conversation, without waiting for a message from an external Source. Give the title, the scope the work is authorized within, and the request in the person\'s own words; a scope that is vague or a target that is not settled belongs in a question to the person first, not in this call.',
+    schema: z.object({
+      title: z.string().trim().min(1).max(200),
+      scope: z.string().trim().min(1).max(1500),
+      request: z.string().trim().min(1),
+      worktree_name: WorktreeNameSchema.describe(`Short English name for the ticket's working directory. ${WorktreeNameSchema.description ?? ''}`),
+    }).strict(),
+    execute: async args => {
+      const at = new Date().toISOString()
+      const id = key('trigger', LOCAL_SOURCE, at, String(Math.random()).slice(2))
+      const trigger: Trigger = { id, source: LOCAL_SOURCE, threads: [{ source: LOCAL_SOURCE, id }], actor: { source: LOCAL_SOURCE, id: LOCAL_ACTOR },
+        human: true, addressed: 'direct', at, text: args.request, meta: {} }
+      const received = host.receive(trigger)
+      if (received === 'duplicate') return { refused: 'This request was already recorded; the ticket it opened is unchanged.' }
+      const result = host.engine.decide(id, { kind: 'accept', title: args.title, scope: args.scope,
+        name: args.worktree_name, reason: { code: 'explicitRouted' } })
+      return routed(host, { decision: result.kind, reason: 'Opened a ticket for this request', ticketId: result.ticketId })
+    },
+  })
+}
+
 export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
   return [
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
       false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
     routeTool(host),
+    requestTool(host),
     tool({
       name: 'orchestrator_ticket_retry',
       description: 'Start a new assignment on an explicit human request to retry a ticket whose worker reported failed or blocked, or whose input was not delivered; the stalled one ends.',

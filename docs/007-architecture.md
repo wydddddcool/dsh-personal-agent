@@ -359,6 +359,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/infra/text.ts` | Word counts and the chat message limit, `fill` and `sameName` |
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
+| `src/sources/local.ts` | The local kind: no poll and no external service, so the main Session can open a Ticket from this deployment's own conversation through `orchestrator_request` |
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
 | `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
