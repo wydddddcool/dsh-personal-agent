@@ -1,5 +1,5 @@
 /** Ticket stage classification and retry eligibility (docs/003). */
-import { latestAssignment, waitsForPerson, type Ticket } from './model.ts'
+import { attentionExpired, latestAssignment, waitsForPerson, type Ticket } from './model.ts'
 
 /** High-level execution stage of a ticket: waiting on a person, actively working or queued, idle between turns, or ended. */
 export type TicketStage = { stage: 'person'; action: 'delivery' | 'answer' | 'review' | 'blocked' | 'failed' }
@@ -9,7 +9,9 @@ export type TicketStage = { stage: 'person'; action: 'delivery' | 'answer' | 're
 export function ticketStage(ticket: Ticket): TicketStage {
   if (ticket.ended) return { stage: 'ended' }
   if (ticket.delivery) return { stage: 'person', action: 'delivery' }
-  if (ticket.attention) return { stage: 'person', action: 'answer' }
+  // A question nobody answered within `ATTENTION_TIMEOUT_MS` is set aside: the panel stops reporting it as waiting for a
+  // person, and the ticket falls through to the stage its Assignment is in.
+  if (ticket.attention && !attentionExpired(ticket)) return { stage: 'person', action: 'answer' }
   const assignment = latestAssignment(ticket)
   const report = assignment?.report?.state
   if (report === 'ready') return { stage: 'person', action: 'review' }

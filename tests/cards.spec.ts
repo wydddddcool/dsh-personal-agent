@@ -159,7 +159,7 @@ it('shows a ticket card\'s state from a closed set: the open ticket\'s stage, th
   const report = (state: string) => ({ ...ticket, assignments: [{ ...ticket.assignments[0]!, report: { state, summary: '', at: '' } }] }) as Ticket
   const cases: [Ticket, string][] = [
     [ticket, 'person/review'], [report('blocked'), 'person/blocked'], [report('failed'), 'person/failed'], [report('waiting'), 'idle'], [report('progress'), 'working'],
-    [{ ...ticket, attention: { id: 'q', question: 'Desktop too?' } }, 'person/answer'], [{ ...ticket, delivery: { error: 'gone', at: '' } }, 'person/delivery'],
+    [{ ...ticket, attention: { id: 'q', question: 'Desktop too?', at: new Date().toISOString() } }, 'person/answer'], [{ ...ticket, delivery: { error: 'gone', at: '' } }, 'person/delivery'],
     [{ ...ticket, assignments: [{ ...ticket.assignments[0]!, state: 'pending', report: undefined }] }, 'working/queued'],
     [{ ...ticket, ended: { at: 'e', by: 'human', reason: 'Not needed after all', outcome: 'stopped' } }, 'stopped'],
     [{ ...ticket, ended: { at: 'e', by: 'executor', reason: 'merged', outcome: 'merged' } }, 'merged'],
@@ -169,7 +169,7 @@ it('shows a ticket card\'s state from a closed set: the open ticket\'s stage, th
   expect(ticketCard(cases[8]![0])).toMatchObject({ ended: { at: 'e', by: 'human', reason: 'Not needed after all' } })
   expect(ticketCard(ticket)).toMatchObject({ ticket_id: 'ticket-1', pr_number: 42, strength: 'explicit' })
   expect(ticketCard(ticket)).not.toHaveProperty('attention')
-  expect(ticketCard({ ...ticket, attention: { id: 'q', question: 'Desktop too?' } })).toMatchObject({ attention: { question: 'Desktop too?' } })
+  expect(ticketCard({ ...ticket, attention: { id: 'q', question: 'Desktop too?', at: new Date().toISOString() } })).toMatchObject({ attention: { question: 'Desktop too?' } })
 })
 it('shows a decision with snake_case keys and a reference to its details', () => {
   const decision: Decision = { id: 'd1', evalId: 'e1', threadKey: 'github:42', triggerIds: ['request-1'], policyVersion: 'v1', at: 'a', kind: 'accept', reason: [said('r')],

@@ -271,8 +271,11 @@ export interface PolicyEffect {
 export type TicketEndBy = 'executor' | 'human'
 /** How a ticket ended: with its result, with its pull request merged or closed unmerged, with nothing to do, or stopped by a person. */
 export type TicketOutcome = 'completed' | 'merged' | 'closed' | 'dropped' | 'stopped'
-/** A question for a person; `triggerId` is the human message that raised it, whose conversation it goes back to. */
-export interface Attention { id: string; question: string; triggerId?: string }
+/**
+ * A question for a person; `triggerId` is the human message that raised it, whose conversation it goes back to, and `at`
+ * is when it was asked, which tells a question left unanswered for long enough from one just asked.
+ */
+export interface Attention { id: string; question: string; triggerId?: string; at: string }
 /** Ticket aggregate: an authorized work item with its assignments, channels, thread bindings, and inputs. */
 export interface Ticket {
   id: string
@@ -343,12 +346,27 @@ export function readUntil(ticket: Pick<Ticket, 'assignments'>, progress = true):
   return [report?.at ?? '', ...ticket.assignments.map(assignment => assignment.idleAt ?? '')].reduce((a, b) => a > b ? a : b)
 }
 /**
+ * How long an unanswered question keeps waiting for a person before the ticket is set aside, so a question nobody came
+ * back to does not hold the ticket's worker slot or keep the panel saying it needs a person.
+ */
+export const ATTENTION_TIMEOUT_MS = 24 * 60 * 60 * 1000
+/** Whether the ticket's question for a person has gone unanswered past `ATTENTION_TIMEOUT_MS`. */
+export function attentionExpired(ticket: Ticket, now = Date.now()): boolean {
+  if (!ticket.attention) return false
+  const asked = Date.parse(ticket.attention.at)
+  return Number.isFinite(asked) && now - asked >= ATTENTION_TIMEOUT_MS
+}
+/**
  * Whether a ticket waits for a person: its latest Assignment reported blocked or failed, and no person's message reached it
- * since. A later report that is neither, a person's message, or a retry, which starts a new Assignment, lifts it.
+ * since. A later report that is neither, a person's message, or a retry, which starts a new Assignment, lifts it. A
+ * question nobody answered within `ATTENTION_TIMEOUT_MS` stops counting, which sets the ticket aside instead of waiting.
  */
 export function waitsForPerson(ticket: Ticket): boolean {
   const report = latestAssignment(ticket)?.report
   if (report?.state !== 'blocked' && report?.state !== 'failed') return false
+  // A question asked of a person that nobody came back to stops counting after `ATTENTION_TIMEOUT_MS`, so it sets the
+  // ticket aside instead of holding a worker slot and telling the panel a person is still expected to answer.
+  if (attentionExpired(ticket)) return false
   return !ticket.inputs.some(input => input.kind === 'trigger' && input.human && !input.context && input.at > report.at)
 }
 

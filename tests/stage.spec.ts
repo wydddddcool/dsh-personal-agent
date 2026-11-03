@@ -5,7 +5,9 @@ const assignment = (overrides: Partial<Assignment> = {}): Assignment => ({ id: '
 const reported = (state: ReportState, overrides: Partial<Assignment> = {}) => assignment({ report: { state, summary: '', at: '' }, ...overrides })
 const ticket = (overrides: Partial<Ticket> = {}): Ticket => ({ id: 't', title: 'x', decisionId: 'd', mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'listed' }, actor: { source: 'feishu', id: 'ou' }, scope: '' },
   channels: [], assignments: [assignment()], inputs: [], undelivered: [], createdAt: '', updatedAt: '', origin: { triggerId: 'x', triggerIds: ['x'] }, ...overrides })
-const attention = { id: 'q', question: '?' }
+const attention = { id: 'q', question: '?', at: new Date().toISOString() }
+/** A question asked longer ago than the limit, which no longer waits for a person. */
+const staleAttention = { id: 'q', question: '?', at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }
 /** A person's message that reached the Ticket after its report. */
 const answered = { inputs: [{ id: 'i', kind: 'trigger' as const, triggerId: 'e', at: 'later', human: true as const }] }
 const reportedAt = (state: ReportState) => reported(state, { report: { state, summary: '', at: 'earlier' } })
@@ -31,6 +33,9 @@ describe('ticketStage', () => {
     ['a running Assignment', ticket(), { stage: 'working' }],
     ['a progress Report', ticket({ assignments: [reported('progress')] }), { stage: 'working' }],
     ['an ended Ticket', ticket({ ended, attention, assignments: [reported('failed')] }), { stage: 'ended' }],
+    // A question nobody came back to within the limit is set aside, not still reported as waiting for a person.
+    ['a question asked past the limit', ticket({ attention: staleAttention, assignments: [reported('blocked', { state: 'ended' })] }), { stage: 'idle' }],
+    ['a question asked within the limit', ticket({ attention, assignments: [reported('blocked')] }), { stage: 'person', action: 'answer' }],
   ])('%s', (_name, value, stage) => { expect(ticketStage(value)).toEqual(stage) })
 })
 

@@ -258,7 +258,7 @@ function initial(): PanelServer {
       defaultChanged: [], revisions: [{ ...defaults, changed: [] }], sessions: [], notificationPending: false, next_offset: null },
     tickets: { open: [ticketSummary()], ended: [ended] }, ticketDetails: { t1: ticketDetail() },
     threads: [threadSummary()], threadPages: threadPage,
-    person: [ticketSummary({ attention: { id: 'q1', question: '需要确认按钮颜色' }, note: { text: '需要确认按钮颜色', error: false }, reply },
+    person: [ticketSummary({ attention: { id: 'q1', question: '需要确认按钮颜色', at: new Date().toISOString() }, note: { text: '需要确认按钮颜色', error: false }, reply },
       { stage: 'person', action: 'answer' }),
       ticketSummary({ id: 't4', title: '截图工具', actions: { retry: true, stop: true }, sessionId: 'worker-t4',
         summary: 'LlmError: no adapter registered for provider "provider-a"',

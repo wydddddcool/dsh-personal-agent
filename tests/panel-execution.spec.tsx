@@ -87,7 +87,7 @@ it('links a question to its Channel, folds consecutive automated messages among 
     trigger: { id: `c${id}`, actor: { source: 'github', id: '' }, human: false,
       preview: `CI of PR #42 at abc1234: 10 checks, ${failed} failed, 0 running.`, thread: 'github:42' } })
   const t1 = server.ticketDetails.t1!
-  server.ticketDetails.t1 = { ...t1, stage: 'person', action: 'answer', attention: { id: 'q1', question: '需要确认按钮颜色' }, inputs: [ci('i3',
+  server.ticketDetails.t1 = { ...t1, stage: 'person', action: 'answer', attention: { id: 'q1', question: '需要确认按钮颜色', at: new Date().toISOString() }, inputs: [ci('i3',
     '2026-09-22T00:06:00Z', 1), ci('i2', '2026-09-22T00:05:00Z', 0)] }
   await mount()
   await click(all('.dt-open').find(button => button.textContent === '修复回归')!)
