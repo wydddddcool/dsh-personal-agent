@@ -65,6 +65,11 @@ it('defines the router preset the main Session runs under: the worker\'s 5-secon
     '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-time-context', '@deepseek-ai/dsh-compaction-basic',
     '@deepseek-ai/dsh-compaction-tool-result-pruner']) expect(named(plugins, name).length, name).toBeGreaterThan(0)
   expect(named(plugins, '@deepseek-ai/dsh-tool-fs')).toEqual([{ write: false, edit: false }])
+  // The router condenses at a fraction of the routed window rather than at the default that follows it. A main Session
+  // answering a person slows down well before its model's window fills, and the default made that condensation never
+  // happen by itself. The worker keeps the default: its turns are short, so it reaches no threshold worth tuning.
+  expect(named(plugins, '@deepseek-ai/dsh-compaction-basic')).toEqual([{ thresholdRatio: 0.2 }])
+  expect(named(flat(worker.plugins), '@deepseek-ai/dsh-compaction-basic')).toEqual([undefined])
   const names = plugins.map(row => row.name)
   for (const name of ['@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-subagent-control', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-tool-fs-search',
     '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-ask-user', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-plan-mode',
