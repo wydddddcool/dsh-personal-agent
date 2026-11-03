@@ -183,6 +183,14 @@
             config:
               - id: compaction-basic
                 name: '@deepseek-ai/dsh-compaction-basic'
+                # The default threshold follows the routed model's window, so a model declaring a million tokens condenses only
+                # near 800,000 once its output reservation and 65,536-token headroom are taken off. A main Session answering a
+                # person slows down well before that: on one deployment it had become slow at 545,000 tokens and had never
+                # condensed by itself, so the only condensation was someone typing /compact. A person notices the wait long
+                # before the model nears its limit, so the router condenses at a fifth of the window instead, keeping the
+                # conversation a person talks through responsive whatever model the deployment routes to.
+                config:
+                  thresholdRatio: 0.2
               - id: command-compact
                 name: '@deepseek-ai/dsh-command-compact'
               - id: tool-result-pruner

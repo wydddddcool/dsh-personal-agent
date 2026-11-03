@@ -156,6 +156,14 @@ Setup must succeed before polling or work starts. Overview lists missing require
    List personal CLIs, such as one signed in to your own account, as blocked commands.
 4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
 
+### The main Session's context
+
+The main Session is the conversation a person talks to, so it keeps growing: every routed request, report and notice stays in its history. DeepSeek Harness condenses that history as it approaches the model's context limit. The bundle sets the router preset's own threshold to a fifth of the window (`thresholdRatio: 0.2`), because a person notices a slow answer long before a model nears its limit: with the default, a session that had reached 545,000 tokens of a million-token window was answering slowly and had never condensed by itself. The worker keeps the default, since each of its turns is short.
+
+Type `/compact` to condense the conversation immediately, below any threshold. The command reports how many history items it condensed and roughly how many tokens that freed. It is unavailable while the Session is mid-turn or already condensing.
+
+Condensation keeps the recent tail verbatim and replaces the older part with a summary, so a long-running Session continues from a shorter history rather than losing its thread. Starting from an empty conversation instead means a new Session: the store keeps the master Session's ID, so arranging that is a separate change rather than a setting on this page.
+
 ### Management API
 
 The panel uses a local HTTP API that agents can also call. `SETUP.md` uses it to save settings, and the service script reads `GET state`.
@@ -229,6 +237,14 @@ A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write s
 ## Try it
 
 From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
+
+## Local data on a Mac
+
+An Executor reaches macOS Calendar and Reminders with `osascript`, which its shell tool already runs, so an application such as a personal assistant needs no extra plugin, skill or configuration. The calls run as the operator's own user.
+
+A closed application answers with error `-600`, so a script that reads Calendar fails until Calendar runs. Opening it first is enough: with the application up, reading works with no further setup. Reminders answers whether or not its window is open.
+
+That is a property of the operator's machine rather than of this bundle, and macOS may apply its own privacy controls to the calling process; the operator's first call from a Session they are watching is the cheapest way to find out on a new machine.
 
 ## Upgrade
 
