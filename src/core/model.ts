@@ -351,3 +351,20 @@ export function waitsForPerson(ticket: Ticket): boolean {
   if (report?.state !== 'blocked' && report?.state !== 'failed') return false
   return !ticket.inputs.some(input => input.kind === 'trigger' && input.human && !input.context && input.at > report.at)
 }
+
+/**
+ * One project the agent keeps track of: enough for a Session to say what the person is working on and how far each one is,
+ * without rescanning directories. `step` is the current position in the work, which a person reading the list recognises.
+ */
+export interface ProjectEntry {
+  /** Absolute path of the project directory, which is also the record's key. */
+  path: string
+  name: string
+  /** What the project is, in one sentence. */
+  summary: string
+  /** Where the work stands now, in one sentence. */
+  step: string
+  status: 'active' | 'paused' | 'done' | 'archived'
+  /** When a person or a ticket last changed this record. */
+  updatedAt: string
+}

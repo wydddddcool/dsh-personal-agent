@@ -17,6 +17,7 @@ import type { PromptVersion, Prompts } from './prompts.ts'
 import type { Sessions } from './sessions.ts'
 import type { Settings } from './settings.ts'
 import { KV } from '../kv.ts'
+import type { ProjectEntry } from '../core/model.ts'
 import type { Store } from './store.ts'
 import type { TextCache } from './cache.ts'
 
@@ -25,6 +26,7 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'tickets', holds: 'ticket cards, newest first; a card\'s state is person/review after a ready report, person/blocked or person/failed after those reports, person/answer with a question, person/delivery when an input could not reach the worker, working or working/queued while it works, idle once the worker ended its turn without a report, else how the ticket ended' },
   { name: 'triggers', holds: 'trigger cards with where each went, newest first' },
   { name: 'threads', holds: 'subscribed threads, newest activity first, with their labels, tickets, current assessment and polling errors' },
+  { name: 'projects', holds: 'every project the agent tracks, most recently changed first, with its summary and where the work stands' },
   { name: 'thread/<key>', holds: 'one thread: its label and link, its tickets and latest decisions, and its triggers, newest first', executor: true },
   { name: 'decisions', holds: 'decisions, newest first' },
   { name: 'decision/<id>', holds: 'one decision with its audit' },
@@ -57,7 +59,7 @@ export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(r
   .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
 
 export interface ResourceHost {
-  readonly store: Pick<Store, 'get' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus'>
+  readonly store: Pick<Store, 'get' | 'set' | 'keys' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus'>
   readonly pages: TextCache
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'skills' | 'defaultChanged'>
   readonly commands: Commands
@@ -129,6 +131,15 @@ const ROUTES: readonly Route[] = [
     const { store } = main(read)
     const threads = store.read.subscribedThreads().sort((a, b) => (b.lastAt ?? b.createdAt).localeCompare(a.lastAt ?? a.createdAt))
     return list(read, (offset, count) => threads.slice(offset, offset + count).map(thread => threadCard(thread, threadTitle(store, thread))))
+  }],
+  ['projects', read => {
+    const entries = read.host.store.keys(KV.projects.entry)
+      .map(name => read.host.store.get(KV.projects.entry(name.slice(KV.projects.entry.prefix.length))))
+      .filter((entry): entry is ProjectEntry => entry !== undefined)
+      // Newest change first. Projects changed in the same instant tie-break by path, so two reads that saw the same
+      // records never disagree on the order.
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
+    return list(read, (offset, count) => entries.slice(offset, offset + count))
   }],
   ['thread/', read => {
     const { host, rest, ticketId } = read

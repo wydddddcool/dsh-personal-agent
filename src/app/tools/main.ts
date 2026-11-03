@@ -2,9 +2,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
-import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople, type Trigger }
-  from '../../core/index.ts'
+import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople,
+  type ProjectEntry, type Trigger } from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
+import { KV } from '../../kv.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
 import { ticketCard } from '../cards.ts'
 import { PromptConfigSchema, savePrompts, type Prompts } from '../prompts.ts'
@@ -23,7 +24,7 @@ export interface MainToolsHost {
   readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
   /** Admits a Trigger the main Session composed itself, so a request made here does not need an external Source. */
   receive(trigger: Trigger): 'stored' | 'duplicate' | 'filtered'
-  readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings' | 'get' | 'set' | 'keys'>
   readonly prompts: Pick<Prompts, 'preview' | 'save'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
   readonly settings: Pick<Settings, 'view' | 'block' | 'save' | 'pause' | 'sync'>
@@ -186,6 +187,33 @@ function requestTool(host: MainToolsHost): Tool {
   })
 }
 
+
+/** The four states a project record can be in, as `orchestrator_project` takes them. */
+const ProjectStatusSchema = z.enum(['active', 'paused', 'done', 'archived'])
+/**
+ * Reads and writes the project list, which lets a Session answer what the person is working on and how far each one is
+ * without rescanning directories. One record per absolute project path.
+ */
+function projectsTool(host: MainToolsHost): Tool[] {
+  return [
+    tool({
+      name: 'orchestrator_project',
+      description: 'Record or update one project: what it is and where the work stands. Upserts by path. List them with orchestrator_read projects.',
+      schema: z.object({
+        path: z.string().trim().min(1).describe('Absolute project directory; its identity in the list.'),
+        name: z.string().trim().min(1).max(120).describe('Short name a person recognises.'),
+        summary: z.string().trim().min(1).max(500).describe('What the project is, in one sentence.'),
+        step: z.string().trim().min(1).max(500).describe('Where the work stands now, in one sentence.'),
+        status: ProjectStatusSchema.describe('active, paused, done or archived.'),
+      }).strict(),
+      execute: async args => {
+        const entry: ProjectEntry = { ...args, updatedAt: new Date().toISOString() }
+        host.store.set(KV.projects.entry(entry.path), entry)
+        return { project: entry }
+      },
+    }),
+  ]
+}
 export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
   return [
@@ -193,6 +221,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
       false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
     routeTool(host),
     requestTool(host),
+    ...projectsTool(host),
     tool({
       name: 'orchestrator_ticket_retry',
       description: 'Start a new assignment on an explicit human request to retry a ticket whose worker reported failed or blocked, or whose input was not delivered; the stalled one ends.',

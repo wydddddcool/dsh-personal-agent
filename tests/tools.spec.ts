@@ -489,3 +489,20 @@ it('gives a worker the other messages of the request its ticket was accepted fro
   expect(page).toMatchObject({ batch: [{ trigger_id: other, read: `trigger/${other}` }] })
   expect(await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `trigger/${other}` })).toMatchObject({ trigger_id: other })
 })
+
+it('records projects and reads them back newest change first through the projects resource, upserting by path', async () => {
+  const write = (overrides: Record<string, unknown>) => h.runTool(h.runtime.masterId, 'orchestrator_project', {
+    path: '/work/billing', name: 'billing', summary: 'Invoicing service.', step: 'Wiring the retry path.', status: 'active', ...overrides })
+  const list = () => read('projects') as Promise<{ items: { path: string; step: string; status: string }[]; next_offset: number | null }>
+  expect(await list()).toEqual({ items: [], next_offset: null })
+  await write({})
+  expect(await list()).toMatchObject({ items: [expect.objectContaining({ path: '/work/billing', step: 'Wiring the retry path.', status: 'active' })] })
+  // Writing the same path again updates that project rather than adding a second one.
+  await write({ step: 'Shipped the retry path.', status: 'done' })
+  expect(await list()).toMatchObject({ items: [expect.objectContaining({ step: 'Shipped the retry path.', status: 'done' })] })
+  // Another project comes first, since it changed most recently. A later write carries a later `updatedAt`, which is
+  // what orders the list; two writes in the same instant tie-break by path so the order never flickers.
+  await new Promise(resolve => setTimeout(resolve, 2))
+  await write({ path: '/work/reports', name: 'reports', step: 'Drafting the query.', status: 'active' })
+  expect((await list()).items.map(item => item.path)).toEqual(['/work/reports', '/work/billing'])
+})

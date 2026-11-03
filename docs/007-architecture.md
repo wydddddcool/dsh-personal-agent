@@ -495,6 +495,7 @@ The main Session has 14 application tools:
 | Purpose | Tools |
 | --- | --- |
 | Read and route | `orchestrator_read`, `orchestrator_route` |
+| Track projects | `orchestrator_project`; the list reads as `orchestrator_read projects` |
 | Manage Tickets | `orchestrator_ticket_retry`, `orchestrator_ticket_request_status`, `orchestrator_ticket_note` |
 | Re-evaluate | `orchestrator_trigger_requeue` |
 | Assess proactive work | `orchestrator_eval`, `orchestrator_eval_read`, `orchestrator_eval_decide` |
