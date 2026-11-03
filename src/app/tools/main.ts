@@ -170,6 +170,7 @@ function requestTool(host: MainToolsHost): Tool {
       scope: z.string().trim().min(1).max(1500),
       request: z.string().trim().min(1),
       worktree_name: WorktreeNameSchema.describe(`Short English name for the ticket's working directory. ${WorktreeNameSchema.description ?? ''}`),
+      project: z.string().trim().min(1).optional().describe('Absolute path of the project this work is for, such as /Users/me/work/billing. The ticket directory goes beside it, under .superagent/tickets; without it, the ticket goes under the configured root.'),
     }).strict(),
     execute: async args => {
       const at = new Date().toISOString()
@@ -179,7 +180,7 @@ function requestTool(host: MainToolsHost): Tool {
       const received = host.receive(trigger)
       if (received === 'duplicate') return { refused: 'This request was already recorded; the ticket it opened is unchanged.' }
       const result = host.engine.decide(id, { kind: 'accept', title: args.title, scope: args.scope,
-        name: args.worktree_name, reason: { code: 'explicitRouted' } })
+        name: args.worktree_name, ...args.project ? { project: args.project } : {}, reason: { code: 'explicitRouted' } })
       return routed(host, { decision: result.kind, reason: 'Opened a ticket for this request', ticketId: result.ticketId })
     },
   })

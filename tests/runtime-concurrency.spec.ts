@@ -900,6 +900,12 @@ describe('the Executor\'s parts', () => {
     expect(execution.assignment).not.toContain(mandateInstructions(ticket.mandate))
     expect(execution.assignment).toContain('- Copy fixes (copy): Fix typos only.')
     expect(mandateInstructions({ strength: 'explicit' })).toBe('')
+    // A ticket that names its project keeps its directory beside that project, not under the configured root.
+    expect(ticketExecution(ticket, { kind: 'accept', title: 'Fix', scope: 's', reason: 'r', name: 'fix-login',
+      project: '/work/billing' } as never, settings, '/state').directory).toBe('/work/.superagent/billing/fix-login-ticket-01234')
+    // Without a project, the configured root holds it.
+    expect(ticketExecution(ticket, { kind: 'accept', title: 'Fix', scope: 's', reason: 'r', name: 'fix-login' } as never, settings, '/state').directory)
+      .toBe('/state/work/fix-login-ticket-01234')
   })
   it('renders each kind of Input as its worker reads it, inline, and no reopen Input', () => {
     const asked = { id: 'tr1', source: 'feishu', threads: [{ source: 'feishu', id: 'oc:om_1' }], actor: { source: 'feishu', id: 'ou_a' }, human: true,
