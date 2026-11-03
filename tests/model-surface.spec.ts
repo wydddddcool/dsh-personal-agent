@@ -38,10 +38,12 @@ interface Skill { name: string; description: string; content: string }
  * Lower this limit when shrinking model-facing text; raise it only intentionally and explain why in the commit message.
  */
 // The orchestrator's limit rose by 1_000 to hold `orchestrator_project`, then by 500 more for the paragraph that teaches
-// the Session when to open a Ticket from its own conversation, which the tool list alone did not say.
+// the Session when to open a Ticket from its own conversation, which the tool list alone did not say. It rose by 500
+// again for the paragraph that decides when not to speak at all: both roles read it, and the team's communication
+// section covers only the IM half of that judgment.
 // The worker's limit rose by 1_500 for the reversibility rule: which actions need a person's consent is policy the
 // worker must read, and it had none.
-const BUDGET: Record<Role, number> = { orchestrator: 60_500, worker: 42_000 }
+const BUDGET: Record<Role, number> = { orchestrator: 61_000, worker: 42_000 }
 const PROMPTS = 'prompts/, skills/', TOOLS = 'src/app/tools/', SESSIONS = 'src/app/sessions.ts'
 const NOTICES = 'src/app/notices.ts', LINKS = 'src/app/links.ts', ASSESSMENT = 'src/app/assessment.ts'
 const EXECUTOR = 'src/executor/dsh.ts', ERRORS = 'src/core/errors.ts'
