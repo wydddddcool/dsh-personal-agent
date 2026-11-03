@@ -70,7 +70,7 @@ export interface ExecutorHost {
   readonly machine: Pick<Machine, 'stateDir'>
   readonly lifetime: AbortSignal
   /** Session manager for worker sessions and for relaying worker reports to the main Session. */
-  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
+  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds' | 'retire'>
   closing(): boolean
   /** Whether processing is paused, which holds launches and input deliveries. */
   paused(): boolean
@@ -374,6 +374,18 @@ export class DshExecutor implements Executor {
       // Its shell jobs and subagents stop with it, also those of a worker that ends its own turn.
       this.stopWork(ticket.id, reason)
       this.left.get(ticket.id)?.collect.abort(); this.left.delete(ticket.id); this.personal.delete(ticket.id)
+    })
+  }
+  /**
+   * Retire an ended ticket's Executor Session and the workspace set aside for its directory, so an ended ticket stops costing
+   * a conversation row and a directory. Runs after the end committed, and only once the ticket's background work stopped.
+   */
+  retire(ticket: Ticket): void {
+    const sessionId = workerSessionId(ticket.id)
+    const directory = ticket.execution?.directory ?? ''
+    this.host.store.afterCommit(() => {
+      void this.background(this.stopped(ticket.id).then(() => this.host.sessions.retire(sessionId, directory))
+        .catch(() => { /* The conversation lists keep the Session; the ticket is over either way. */ }))
     })
   }
   /** Stop what a ticket's worker runs in the background (see `stopBackground`). */

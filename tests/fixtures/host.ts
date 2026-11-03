@@ -86,6 +86,31 @@ export function jobRegistry(owner: (sessionId: string) => FakeAgent | undefined 
 }
 
 /**
+ * Workspace registry stand-in: records each reserved directory and the archive set, so a test can read what an ended ticket
+ * gave back. `delete` removes only the registration, as the real registry does, and `resolveByPath` finds one by directory.
+ */
+export function workspaceRegistry() {
+  const workspaces = new Map<string, { id: string; path: string; sessionIds: string[] }>()
+  const archived = new Set<string>()
+  const registry = {
+    archivedSessionIds: () => [...archived],
+    archived,
+    workspaces,
+    async create(path: string) {
+      const existing = [...workspaces.values()].find(workspace => workspace.path === path)
+      if (existing) return existing
+      const workspace = { id: `ws-${workspaces.size + 1}`, path, sessionIds: [] as string[] }
+      workspaces.set(workspace.id, workspace)
+      return workspace
+    },
+    async resolveByPath(path: string) { return [...workspaces.values()].find(workspace => workspace.path === path) },
+    async archiveSession(sessionId: string) { archived.add(sessionId) },
+    async unarchiveSession(sessionId: string) { archived.delete(sessionId) },
+    async delete(id: string) { return workspaces.delete(id) },
+  }
+  return registry
+}
+/**
  * DSH's subagents as the Executor uses them. `spawn` starts a child of a Session, an agent while it lives, which a drain of
  * the Session's descendants refuses from then on; `settle` ends one, whose end wakes its idle parent or steers a running one
  * before a wait for the parent's children returns. Releasing or interrupting a child settles it; a drain of descendants
@@ -238,8 +263,9 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const webServer = { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }
   const jobs = jobRegistry(id => agents.get(id))
   const subagents = subagentRuntime(agents)
+  const workspace = workspaceRegistry()
   const services = { agents, llm: { resolveCallConfig: vi.fn(async (value: unknown) => value) }, sessionController: controller,
-    sessionPersistence: persistence, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer,
+    sessionPersistence: persistence, workspaceRegistry: workspace, permissionPresets: { set: () => {} }, subprocess, webServer,
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
@@ -293,7 +319,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** A step of the worker claims what waits for it, and is cut off before the Session took it. */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop, workspace,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

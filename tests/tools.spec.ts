@@ -1,6 +1,9 @@
 /** Session tool registration, role-scoped resource reads, and routing/settings tool contracts. */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { TICKET_STATES } from '../src/app/cards.ts'
+import { executionRoot } from '../src/app/execution-environment.ts'
 import { builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts'
 import { UserError } from '../src/core/index.ts'
 import { KV } from '../src/kv.ts'
@@ -15,6 +18,7 @@ afterEach(async () => { await h.stop() })
 const words = (count: number) => Array.from({ length: count }, () => 'word').join(' ')
 const read = (resource: string, page: { offset?: number; limit?: number } = {}) =>
   h.runTool(h.runtime.masterId, 'orchestrator_read', { resource, ...page })
+const executorRoot = () => executionRoot(h.runtime.store.settings(), h.directory)
 
 it('reads the lists, a ticket, a decision, the settings, the prompts and the models as resources', async () => {
   const { ticket, trigger } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
@@ -488,6 +492,56 @@ it('gives a worker the other messages of the request its ticket was accepted fro
   const page = await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `ticket/${ticket.id}` })
   expect(page).toMatchObject({ batch: [{ trigger_id: other, read: `trigger/${other}` }] })
   expect(await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `trigger/${other}` })).toMatchObject({ trigger_id: other })
+})
+
+it('routes a ticket into the project its accept names, and into the configured root without one', async () => {
+  const named = feishu('1', '@bot 修一下回归'), unnamed = feishu('2', '@bot 再修一个')
+  h.runtime.receive(named); h.runtime.receive(unnamed)
+  await h.runtime.idle()
+  const accept = { kind: 'accept', worktree_name: 'fix-regression', acknowledgement: '收到。' }
+  const { results } = await h.runTool(h.runtime.masterId, 'orchestrator_route', { decisions: [
+    { ...accept, trigger_id: named.id, title: 'Fix', project: '/work/billing' },
+    { ...accept, trigger_id: unnamed.id, title: 'Fix' },
+    // A relative path is refused alone, so the ticket is not created with a directory nobody can find.
+    { ...accept, trigger_id: unnamed.id, title: 'Fix', project: 'work/billing' },
+  ] }) as { results: Record<string, unknown>[] }
+  expect(results[0]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[1]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[2]).toEqual({ trigger_id: unnamed.id, kind: 'accept', refused: 'project: An absolute path' })
+  const tickets = h.runtime.store.tickets.list()
+  const namedTicket = tickets.find(ticket => ticket.origin.triggerId === named.id)!
+  const unnamedTicket = tickets.find(ticket => ticket.origin.triggerId === unnamed.id)!
+  // The named project holds its ticket beside it, not in the one shared root every ticket once shared.
+  expect(namedTicket.execution!.directory).toBe('/work/.superagent/billing/fix-regression-' + namedTicket.id.slice(0, 12))
+  // Without a project, the configured root holds the ticket as before.
+  expect(unnamedTicket.execution!.directory).toBe(join(executorRoot(), 'fix-regression-' + unnamedTicket.id.slice(0, 12)))
+})
+
+it('retires an ended ticket: its Executor Session archived, its workspace released, its directory left alone', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  const directory = ticket.execution!.directory
+  const workspace = [...h.workspace.workspaces.values()].find(item => item.path === directory)!
+  expect(workspace.sessionIds).toEqual([])
+  // The ticket is over once its worker drops it as having nothing to do.
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(true))
+  expect(h.runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ outcome: 'dropped' })
+  // The workspace registration goes once the directory holds no live Session, and the directory itself stays.
+  await vi.waitFor(() => expect(h.workspace.workspaces.has(workspace.id)).toBe(false))
+  expect(existsSync(directory)).toBe(true)
+})
+
+it('restores an archived ticket Session before a person\'s message resumes it', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(true))
+  // A person's message on the ticket's thread resumes it, and the Session it continues must take steps again.
+  const follow = feishu('2', '@bot 其实这个还是要修的', { root_id: 'om_1' })
+  h.runtime.receive(follow)
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(false))
 })
 
 it('records projects and reads them back newest change first through the projects resource, upserting by path', async () => {
