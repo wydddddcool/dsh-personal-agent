@@ -54,6 +54,7 @@ const RouteItemSchema = z.object({
   ticket_id: z.string().nullish().describe('attach and stop: the ticket.'),
   title: z.string().nullish().describe('accept: a short label of at most 200 characters describing the original request; no added requirements or implementation advice.'),
   worktree_name: z.string().nullish().describe(`accept: ${WorktreeNameSchema.description ?? ''}`),
+  project: z.string().nullish().describe('accept: absolute project path; the ticket directory goes beside it.'),
   acknowledgement: z.string().nullish().describe(`accept: one brief sentence of at most ${IM_WORDS} words naming the concrete change and intended result in the source language. It is posted as a reply to the original source on acceptance, so do not quote the source; quote an earlier proposal briefly only when the trigger merely confirms it and the sentence does not already state it. No generic I will handle it.`),
   note: z.string().nullish().describe(`accept and attach: ${RoutingNoteSchema.description ?? ''}`),
   reason: z.string().nullish().describe('ignore and stop: why, at most 500 characters; an ignore needs it.'),
@@ -66,11 +67,15 @@ const FIELDS: Record<Field, { check: z.ZodType; reads: readonly Kind[]; needs: r
   ticket_id: { check: z.string(), reads: ['attach', 'stop'], needs: ['attach', 'stop'] },
   title: { check: z.string().max(200), reads: ['accept'], needs: ['accept'] },
   worktree_name: { check: WorktreeNameSchema, reads: ['accept'], needs: ['accept'] },
+  project: { check: z.string().trim().refine(path => path.startsWith('/'), 'An absolute path'), reads: ['accept'], needs: [] },
   acknowledgement: { check: AcknowledgementSchema, reads: ['accept'], needs: ['accept'] },
   note: { check: RoutingNoteSchema, reads: ['accept', 'attach'], needs: [] },
   reason: { check: z.string().max(500), reads: ['ignore', 'stop'], needs: ['ignore'] },
 }
-/** Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. */
+/**
+ * Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. A value that passes its check
+ * is written back normalized, so what the item's kind forwards is exactly what the check accepted, such as a trimmed path.
+ */
 function invalid(item: RouteItem): string | undefined {
   for (const [field, { check, reads, needs }] of Object.entries(FIELDS) as [Field, typeof FIELDS[Field]][]) {
     const value = item[field]
@@ -81,6 +86,7 @@ function invalid(item: RouteItem): string | undefined {
     }
     const checked = check.safeParse(value)
     if (!checked.success) return `${field}: ${checked.error.issues[0]?.message ?? 'invalid'}`
+    if (typeof checked.data === 'string') (item as unknown as Record<string, unknown>)[field] = checked.data
   }
   return undefined
 }
@@ -99,7 +105,7 @@ function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string
     case 'accept': {
       const before = host.store.triggers.disposition(item.trigger_id)?.decisionId
       const decision = host.engine.decide(item.trigger_id, { kind: 'accept', title: item.title!, scope: item.title!, reason: { code: 'explicitRouted' },
-        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...note })
+        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...(item.project ? { project: item.project } : {}), ...note })
       // A Decision that created no ticket is the item's refusal; one that existed before keeps what it was accepted with.
       if (decision.kind !== 'accept' || !decision.ticketId) return { refused: `Ticket was not created: ${reasonText(decision.reason)}` }
       if (decision.id === before) {
@@ -171,7 +177,7 @@ function requestTool(host: MainToolsHost): Tool {
       scope: z.string().trim().min(1).max(1500),
       request: z.string().trim().min(1),
       worktree_name: WorktreeNameSchema.describe(`Short English name for the ticket's working directory. ${WorktreeNameSchema.description ?? ''}`),
-      project: z.string().trim().min(1).optional().describe('Absolute path of the project this work is for, such as /Users/me/work/billing. The ticket directory goes beside it, under .superagent/tickets; without it, the ticket goes under the configured root.'),
+      project: z.string().trim().min(1).refine(path => path.startsWith('/'), 'An absolute path').optional().describe('Absolute path of the project this work is for; the ticket directory goes beside it.'),
     }).strict(),
     execute: async args => {
       const at = new Date().toISOString()

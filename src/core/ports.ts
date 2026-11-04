@@ -69,6 +69,11 @@ export interface Executor {
   deliver(ticket: Ticket, assignment: Assignment): void
   /** End an assignment's work, such as cancelling its Session's turn; called after the ticket or assignment has already ended in the domain. */
   stop(ticket: Ticket, assignment: Assignment, reason: string): void
+  /**
+   * The ticket ended: retire its Executor Session from the conversation lists and give back the workspace set aside for it,
+   * so an ended ticket stops costing a row and a directory. Called after the end committed, once per ticket.
+   */
+  retire?(ticket: Ticket): void
 }
 
 /** A message for a Channel; `ticketId` names the Ticket it is for, when there is one. */

@@ -1,6 +1,9 @@
 /** Session tool registration, role-scoped resource reads, and routing/settings tool contracts. */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { TICKET_STATES } from '../src/app/cards.ts'
+import { executionRoot } from '../src/app/execution-environment.ts'
 import { builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts'
 import { UserError } from '../src/core/index.ts'
 import { KV } from '../src/kv.ts'
@@ -15,6 +18,7 @@ afterEach(async () => { await h.stop() })
 const words = (count: number) => Array.from({ length: count }, () => 'word').join(' ')
 const read = (resource: string, page: { offset?: number; limit?: number } = {}) =>
   h.runTool(h.runtime.masterId, 'orchestrator_read', { resource, ...page })
+const executorRoot = () => executionRoot(h.runtime.store.settings(), h.directory)
 
 it('reads the lists, a ticket, a decision, the settings, the prompts and the models as resources', async () => {
   const { ticket, trigger } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
@@ -488,6 +492,104 @@ it('gives a worker the other messages of the request its ticket was accepted fro
   const page = await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `ticket/${ticket.id}` })
   expect(page).toMatchObject({ batch: [{ trigger_id: other, read: `trigger/${other}` }] })
   expect(await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `trigger/${other}` })).toMatchObject({ trigger_id: other })
+})
+
+it('routes a ticket into the project its accept names, and into the configured root without one', async () => {
+  const named = feishu('1', '@bot 修一下回归'), unnamed = feishu('2', '@bot 再修一个')
+  h.runtime.receive(named); h.runtime.receive(unnamed)
+  await h.runtime.idle()
+  const accept = { kind: 'accept', worktree_name: 'fix-regression', acknowledgement: '收到。' }
+  const { results } = await h.runTool(h.runtime.masterId, 'orchestrator_route', { decisions: [
+    { ...accept, trigger_id: named.id, title: 'Fix', project: '/work/billing' },
+    { ...accept, trigger_id: unnamed.id, title: 'Fix' },
+    // A relative path is refused alone, so the ticket is not created with a directory nobody can find.
+    { ...accept, trigger_id: unnamed.id, title: 'Fix', project: 'work/billing' },
+  ] }) as { results: Record<string, unknown>[] }
+  expect(results[0]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[1]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[2]).toEqual({ trigger_id: unnamed.id, kind: 'accept', refused: 'project: An absolute path' })
+  const tickets = h.runtime.store.tickets.list()
+  const namedTicket = tickets.find(ticket => ticket.origin.triggerId === named.id)!
+  const unnamedTicket = tickets.find(ticket => ticket.origin.triggerId === unnamed.id)!
+  // The named project holds its ticket beside it, not in the one shared root every ticket once shared.
+  expect(namedTicket.execution!.directory).toBe('/work/.superagent/billing/fix-regression-' + namedTicket.id.slice(0, 12))
+  // Without a project, the configured root holds the ticket as before.
+  expect(unnamedTicket.execution!.directory).toBe(join(executorRoot(), 'fix-regression-' + unnamedTicket.id.slice(0, 12)))
+})
+
+it('forwards the project path its check accepted, trimmed, and refuses one that is not absolute', async () => {
+  const padded = feishu('1', '@bot 修一下回归'), relative = feishu('2', '@bot 再修一个')
+  h.runtime.receive(padded); h.runtime.receive(relative)
+  await h.runtime.idle()
+  const accept = { kind: 'accept', worktree_name: 'fix-regression', acknowledgement: '收到。', title: 'Fix' }
+  const { results } = await h.runTool(h.runtime.masterId, 'orchestrator_route', { decisions: [
+    // A whitespace-padded absolute path is accepted, and must reach the Engine trimmed, or it would read as relative.
+    { ...accept, trigger_id: padded.id, project: '  /work/billing  ' },
+    { ...accept, trigger_id: relative.id, project: 'work/billing' },
+  ] }) as { results: Record<string, unknown>[] }
+  expect(results[0]).toMatchObject({ kind: 'accept', decision: 'accept' })
+  expect(results[1]).toEqual({ trigger_id: relative.id, kind: 'accept', refused: 'project: An absolute path' })
+  const ticket = h.runtime.store.tickets.list().find(item => item.origin.triggerId === padded.id)!
+  expect(ticket.execution!.directory).toBe('/work/.superagent/billing/fix-regression-' + ticket.id.slice(0, 12))
+})
+
+it('refuses a relative project path on the request tool, so the ticket is never prepared in the host\'s directory', async () => {
+  const request = { title: 'Fix', scope: 'Fix', request: '修一下', worktree_name: 'fix-regression' }
+  // The check runs as the tool parses its arguments, before any ticket exists.
+  await expect(h.runTool(h.runtime.masterId, 'orchestrator_request', { ...request, project: 'billing' })).rejects.toThrow(/absolute path/i)
+  expect(h.runtime.store.tickets.list()).toEqual([])
+})
+
+it('retires an ended ticket: its Executor Session archived, its workspace released, its directory left alone', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  const directory = ticket.execution!.directory
+  const workspace = [...h.workspace.workspaces.values()].find(item => item.path === directory)!
+  expect(workspace.sessionIds).toEqual([])
+  // The ticket is over once its worker drops it as having nothing to do.
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(true))
+  expect(h.runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ outcome: 'dropped' })
+  // The workspace registration goes once the directory holds no live Session, and the directory itself stays.
+  await vi.waitFor(() => expect(h.workspace.workspaces.has(workspace.id)).toBe(false))
+  expect(existsSync(directory)).toBe(true)
+})
+
+it('restores an archived ticket Session before a person\'s message resumes it', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(true))
+  // A person's message on the ticket's thread resumes it, and the Session it continues must take steps again.
+  const follow = feishu('2', '@bot 其实这个还是要修的', { root_id: 'om_1' })
+  h.runtime.receive(follow)
+  await h.runtime.idle()
+  await vi.waitFor(() => expect(h.workspace.archived.has(sessionId)).toBe(false))
+})
+
+it('keeps a resumed ticket\'s Session out of the archive when the resume lands while its end is being retired', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  // Hold the retire of the end at the point a person's message would land, then let it go after the ticket resumed.
+  const archive = h.workspace.archiveSession.bind(h.workspace)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let reached!: () => void
+  const waiting = new Promise<void>(resolve => { reached = resolve })
+  vi.spyOn(h.workspace, 'archiveSession').mockImplementation(async id => {
+    reached()
+    await held
+    await archive(id)
+  })
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'Not a defect.' })
+  await waiting
+  // The ticket resumes while the ended one is still being retired.
+  h.runtime.receive(feishu('2', '@bot 其实这个还是要修的', { root_id: 'om_1' }))
+  await h.runtime.idle()
+  expect(h.runtime.store.tickets.get(ticket.id)!.ended).toBeUndefined()
+  release()
+  await h.runtime.idle()
+  // A Session that resumed is working again, so archiving it would reject its next step.
+  expect(h.workspace.archived.has(sessionId)).toBe(false)
 })
 
 it('records projects and reads them back newest change first through the projects resource, upserting by path', async () => {

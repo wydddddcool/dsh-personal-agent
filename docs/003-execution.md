@@ -105,6 +105,12 @@ Chat Channels receive one final notice about the pull-request outcome. GitHub al
 
 "Awaiting review" therefore means a `ready` Report with a pull request.
 
+### What an ended Ticket releases
+
+An ended Ticket retires its Executor Session and the workspace reserved for its directory, so finished work stops occupying a conversation row and a folder. The Session is archived once the Ticket's background work has stopped: it leaves the conversation lists, its log stays readable, and a person's message on one of the Ticket's threads restores it in the same place. The workspace registration goes once the directory holds no live Session, which leaves the directory and everything in it untouched.
+
+Retirement changes none of the work a Ticket produced. A Ticket that resumes later is unarchived before anything is delivered to it, so a message continues the same Session in the same directory.
+
 ### Follow-ups and context Threads
 
 The Executor decides human follow-ups on its Ticket's own Threads. It handles in-scope requests and hands back requests beyond its scope or for another Ticket. Once no Executor owns the message, it becomes a candidate for the main Session. The main Session may otherwise act on the follow-up only to stop work at the person's request.

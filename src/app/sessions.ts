@@ -4,6 +4,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { WorkspaceUnknownSessionError, type WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import { key, liveTicket, type Ticket } from '../core/index.ts'
@@ -146,12 +147,51 @@ export class Sessions {
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
+    // A Session whose previous part of the work ended was archived then, and archiving rejects every step, so it is restored
+    // before anything is delivered to it. Unarchiving an id that is not archived resolves without writing.
+    if (typeof ctx.workspaceRegistry.unarchiveSession === 'function') {
+      await ctx.workspaceRegistry.unarchiveSession(id as SessionId).catch((error: unknown) => {
+        ctx.logger.warn('dsh-superagent could not restore %s: %s', id, String(error))
+      })
+    }
     const settings = this.host.store.settings()
     await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
     return result.agent
+  }
+  /**
+   * Retire an ended ticket's Executor Session: archive it out of the conversation lists, and drop the workspace reserved for
+   * its directory once no session of that workspace remains. The session's log and the directory's contents are untouched, so
+   * a person's message on one of the ticket's threads still resolves it and unarchiving restores it in place.
+   * Absent services, or a failure of either step, leave the Session and the workspace as they were.
+   * @param resumed - Whether the ticket came back to life, read again after the archive landed so a resume that raced it wins.
+   */
+  async retire(sessionId: string, directory: string, resumed: () => boolean): Promise<void> {
+    const ctx = this.ctx
+    const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
+    if (!registry) return
+    // Archiving stops whatever the Session still runs, which the Executor already ended with the ticket; a Session this host
+    // never created is not in DSH's history to archive.
+    await registry.archiveSession(sessionId as SessionId, { stopActivity: true }).catch((error: unknown) => {
+      if (!(error instanceof WorkspaceUnknownSessionError)) ctx.logger.warn('dsh-superagent could not archive %s: %s', sessionId, String(error))
+    })
+    // The ticket may have resumed while the archive was being written, in which case its Session has to accept steps again.
+    if (resumed()) {
+      await registry.unarchiveSession(sessionId as SessionId).catch((error: unknown) => {
+        ctx.logger.warn('dsh-superagent could not restore the resumed %s: %s', sessionId, String(error))
+      })
+      return
+    }
+    if (!directory) return
+    const workspace = await registry.resolveByPath(directory).catch(() => undefined)
+    if (!workspace) return
+    // Another open ticket may share the directory, so the registration goes only once the directory holds no live Session.
+    const shared = workspace.sessionIds.some(id => id !== sessionId && ctx.agents.get(id) !== undefined)
+    if (!shared) await registry.delete(workspace.id).catch((error: unknown) => {
+      ctx.logger.warn('dsh-superagent could not release the workspace for %s: %s', directory, String(error))
+    })
   }
   /** Returns whether `sessionId` already holds the message delivered under `requestId`, or `false` if the session does not exist. */
   async holds(sessionId: string, requestId: string): Promise<boolean> {

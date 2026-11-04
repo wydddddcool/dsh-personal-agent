@@ -360,6 +360,8 @@ export class Tickets extends EnginePart {
     this.letGo(ticketId, waiting, left)
     this.emit('ticket.ended', { ticketId, by, outcome, ...why })
     for (const assignment of stopping) this.options.executor.stop(ticket, assignment, reason ?? outcome)
+    // Its Session and workspace go with it: an ended ticket leaves no row and no directory behind.
+    this.options.executor.retire?.(ticket)
   }
   /**
    * Whether a ticket's work has not finished at a close at `at`: its worker took up a person's message the ticket decides and

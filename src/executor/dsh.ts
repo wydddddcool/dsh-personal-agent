@@ -70,7 +70,7 @@ export interface ExecutorHost {
   readonly machine: Pick<Machine, 'stateDir'>
   readonly lifetime: AbortSignal
   /** Session manager for worker sessions and for relaying worker reports to the main Session. */
-  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
+  readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds' | 'retire'>
   closing(): boolean
   /** Whether processing is paused, which holds launches and input deliveries. */
   paused(): boolean
@@ -97,9 +97,14 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
  * The directory a ticket works in. A ticket that names a project keeps its directory in a `.superagent` folder beside that
  * project, so one project's tickets stay together wherever the configured root is and the project's own tree stays clean.
  * Without a project, the ticket goes under the configured root.
+ * A project path that is not absolute is refused here rather than resolved, since `dirname`/`basename` would place the ticket
+ * beside the host's own working directory instead of the project the person meant.
  */
 export function ticketDirectory(project: string | undefined, name: string, settings: Settings, stateDir: string): string {
-  return project ? join(dirname(project), '.superagent', basename(project), name) : join(executionRoot(settings, stateDir), name)
+  if (!project) return join(executionRoot(settings, stateDir), name)
+  const path = project.trim()
+  if (!path.startsWith('/')) throw new Error(`A ticket's project must be an absolute path, not ${JSON.stringify(project)}`)
+  return join(dirname(path), '.superagent', basename(path), name)
 }
 /** Builds a newly accepted ticket's Execution metadata: its worktree name, workspace directory, and assignment text. */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
@@ -374,6 +379,24 @@ export class DshExecutor implements Executor {
       // Its shell jobs and subagents stop with it, also those of a worker that ends its own turn.
       this.stopWork(ticket.id, reason)
       this.left.get(ticket.id)?.collect.abort(); this.left.delete(ticket.id); this.personal.delete(ticket.id)
+    })
+  }
+  /**
+   * Retire an ended ticket's Executor Session and the workspace set aside for its directory, so an ended ticket stops costing
+   * a conversation row and a directory. Runs after the end committed, and only once the ticket's background work stopped.
+   */
+  retire(ticket: Ticket): void {
+    const sessionId = workerSessionId(ticket.id)
+    const directory = ticket.execution?.directory ?? ''
+    // Read afresh at each look, so a resume that lands while the retire runs is seen rather than overwritten.
+    const resumed = () => { const stored = this.host.store.tickets.get(ticket.id); return !!stored && liveTicket(stored) }
+    this.host.store.afterCommit(() => {
+      void this.background(this.stopped(ticket.id).then(() => {
+        // A person's message may have resumed the ticket while that stop ran: its Session is working again, and archiving it
+        // now would reject its next step. The end that resumed it retires the Session when it ends in turn.
+        if (resumed()) return
+        return this.host.sessions.retire(sessionId, directory, resumed)
+      }).catch(() => { /* The conversation lists keep the Session; the ticket is over either way. */ }))
     })
   }
   /** Stop what a ticket's worker runs in the background (see `stopBackground`). */
