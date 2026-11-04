@@ -319,6 +319,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     server.threads = []
     return { removed, thread: params.key, context_delivery: 'injected' }
   } },
+  'POST triggers': { body: true, answer: () => { const id = `trigger-${server.queued.size + 1}`; server.queued.add(id); return { trigger: id, received: 'stored' } } },
   'POST triggers/:id/requeue': { answer: ({ params }) => { server.queued.add(params.id); return { queued: true } } },
   'GET decisions': { query: ['kind', 'window', 'offset', 'limit'], answer: ({ query }) =>
     ({ items: query.kind === 'ignore' ? [] : [acceptDecision()], next_offset: null }) },

@@ -52,6 +52,26 @@ function referencedTickets(host: LinkHost, trigger: Trigger, known: readonly Tic
   return [...ids].flatMap(id => host.store.tickets.get(id) ?? []).slice(0, 4)
 }
 /** Builds the main Session's candidate card with routing metadata, handback history, and related or referenced tickets. */
+/**
+ * Routing facts a caller outside a Session already decided, carried on the Trigger's meta. Omitted keys stay absent so the
+ * card looks exactly as before for every Source that sets none of them.
+ */
+function draftOf(trigger: Trigger): Record<string, unknown> {
+  const meta = trigger.meta ?? {}
+  const read = (name: string): string | undefined => {
+    const value = meta[name]
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  }
+  const title = read('title')
+  const scope = read('scope')
+  const project = read('project')
+  const worktree = read('worktree_name')
+  return {
+    ...title ? { drafted_title: title } : {}, ...scope ? { drafted_scope: scope } : {},
+    ...project ? { drafted_project: project } : {}, ...worktree ? { drafted_worktree_name: worktree } : {},
+  }
+}
+
 export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const primary = candidate.triggers.at(-1)!
   const settings = host.store.settings()
@@ -62,7 +82,12 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
     .map(item => ({ trigger_id: trigger.id, ticket_id: item.ticketId, reason: item.reason })))
   // Format the primary trigger like a worker input (including the message it replies to) and summarize earlier batch triggers as cards.
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
+  // A caller outside any Session (the personal-assistant secretary) may have already settled the title, the authorized scope
+  // and the project a request belongs to. Passing them on the card keeps that work out of the assessment, which then routes
+  // rather than re-deriving what the caller already decided.
+  const drafted = draftOf(primary)
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
+    ...drafted,
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
     ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets),
     ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),

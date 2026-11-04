@@ -96,3 +96,32 @@ it('answers a prompt save that lost a race with 409, and a settings body over 12
     body: { error: `Request exceeds ${128 * 1024} bytes` } })
   expect(saves).toEqual([])
 })
+
+it('admits work handed in by a caller that is not a Session, without prompting the main Session', async () => {
+  const received: unknown[] = []
+  const call = serve({ receive: (trigger: unknown) => { received.push(trigger); return 'stored' } })
+  const answer = await call('POST', 'triggers', {
+    text: '在工单目录创建 时间.md，第一行写当前时间。', title: '直投验证：写当前时间',
+    scope: '只在工单目录创建 时间.md', project: '/Users/WYD/Desktop/SPA', worktree_name: 'pa-direct',
+  })
+  expect(answer.status).toBe(200)
+  expect(answer.body.received).toBe('stored')
+  expect(typeof answer.body.trigger).toBe('string')
+  const trigger = received[0] as { source: string; text: string; human: boolean; addressed: string
+    actor: { id: string }; meta: Record<string, string> }
+  // The local Source is what a caller outside any Session acts as, and the request stays a person's own words.
+  expect(trigger.source).toBe('local')
+  expect(trigger.actor.id).toBe('main-session')
+  expect(trigger.human).toBe(true)
+  expect(trigger.addressed).toBe('direct')
+  expect(trigger.text).toContain('创建 时间.md')
+  // What the caller already settled rides on the card instead of being re-derived during assessment.
+  expect(trigger.meta).toEqual({ title: '直投验证：写当前时间', scope: '只在工单目录创建 时间.md',
+    project: '/Users/WYD/Desktop/SPA', worktree_name: 'pa-direct' })
+})
+
+it('refuses a trigger with no text to act on', async () => {
+  const call = serve({ receive: () => 'stored' })
+  const answer = await call('POST', 'triggers', { text: '   ' })
+  expect(answer.status).toBe(400)
+})

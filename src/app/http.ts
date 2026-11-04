@@ -11,7 +11,8 @@ import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, b
 import { policyVersion } from '../policy.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
-import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
+import { UserError, key, type EngineForPeople, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
+import { LOCAL_ACTOR, LOCAL_SOURCE } from '../sources/local.ts'
 import type { Deployment, Machine } from '../deployment.ts'
 import type { DshExecutor } from '../executor/dsh.ts'
 import type { Health } from '../sources/host.ts'
@@ -53,6 +54,12 @@ export interface HttpHost {
   checkSetup(): void
   requestPass(): void
   models(): Promise<ModelCatalog>
+  /**
+   * Admits a Trigger composed outside the main Session, without waking that Session. The Engine stores it and the next pass
+   * assesses it exactly like a message from a configured Source, so a caller that is not a Session can still hand work in:
+   * the router stays a router and never spends a turn on intake.
+   */
+  receive(trigger: Trigger): ReceiveResult
 }
 /**
  * Represents a client-facing 400 or 404 error raised during management route parsing or lookup.
@@ -148,6 +155,15 @@ const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-
 const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
 
+/** Body of `POST triggers`: work handed in by something that is not a Session, such as the personal-assistant secretary. */
+const NewTrigger = z.object({
+  text: z.string().trim().min(1).max(32_000).describe("The request in the person's own words; workers derive requirements from it."),
+  title: z.string().trim().min(1).max(200).optional().describe('Short label for the ticket.'),
+  scope: z.string().trim().min(1).max(1500).optional().describe('What the work is authorized to touch.'),
+  project: z.string().trim().min(1).optional().describe('Absolute project directory; the ticket works beside it under .superagent.'),
+  worktree_name: z.string().trim().min(1).max(64).optional().describe('Short English name for the ticket directory.'),
+}).strict()
+
 function routes(runtime: HttpHost): Routes {
   const { store } = runtime
   const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
@@ -173,6 +189,25 @@ function routes(runtime: HttpHost): Routes {
     'POST threads/:key/unsubscribe': async ({ params }) => {
       const removed = runtime.engine.unsubscribe(params.key)
       return { removed, thread: params.key, context_delivery: await runtime.sessions.delivery(`subscription:${params.key}`) }
+    },
+    'POST triggers': async ({ body }) => {
+      const parsed = NewTrigger.parse(await body(64 * 1024))
+      const at = new Date().toISOString()
+      const id = key('trigger', LOCAL_SOURCE, at, String(Math.random()).slice(2))
+      // A caller outside any Session hands work in as the local Source. It is stored and assessed on the next pass; the main
+      // Session is never prompted, so intake costs no turn and the router stays a router.
+      const trigger: Trigger = {
+        id, source: LOCAL_SOURCE, threads: [{ source: LOCAL_SOURCE, id }],
+        actor: { source: LOCAL_SOURCE, id: LOCAL_ACTOR }, human: true, addressed: 'direct', at,
+        text: parsed.text,
+        meta: {
+          ...parsed.title ? { title: parsed.title } : {},
+          ...parsed.scope ? { scope: parsed.scope } : {},
+          ...parsed.project ? { project: parsed.project } : {},
+          ...parsed.worktree_name ? { worktree_name: parsed.worktree_name } : {},
+        },
+      }
+      return { trigger: id, received: runtime.receive(trigger) }
     },
     'POST triggers/:id/requeue': ({ params }) => {
       const queued = runtime.engine.reevaluate(params.id)
